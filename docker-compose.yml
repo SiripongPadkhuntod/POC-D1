@@ -1,0 +1,88 @@
+name: poc-d1
+
+services:
+  antmedia:
+    image: ${ANT_MEDIA_IMAGE:-antmedia/enterprise:latest}
+    # The current Enterprise latest image is amd64. Docker Desktop will use
+    # emulation automatically on Apple Silicon.
+    platform: ${ANT_MEDIA_PLATFORM:-linux/amd64}
+    restart: unless-stopped
+    environment:
+      LICENSE_KEY: ${ANT_MEDIA_LICENSE_KEY:?Set ANT_MEDIA_LICENSE_KEY in .env}
+    ports:
+      - "5080:5080"                         # Dashboard and local HTTP/WebSocket
+      - "5443:5443"                         # Ant Media native HTTPS
+      - "1935:1935"                         # RTMP ingest
+      # The live application is configured below to use this compact range.
+      # Reserving 101 ports is reliable on Docker Desktop and enough for POC.
+      - "62000-62100:62000-62100/udp"
+    volumes:
+      - antmedia-data:/usr/local/antmedia
+      - ./antmedia/live-red5-web.properties:/usr/local/antmedia/webapps/live/WEB-INF/red5-web.properties:ro
+    stop_grace_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes --save 60 1
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  source-registry:
+    build:
+      context: ./services/source-registry
+    restart: unless-stopped
+    environment:
+      - HTTP_ADDR=:8080
+      - REDIS_ADDR=redis:6379
+    ports:
+      - "8085:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./services/frontend
+      args:
+        NEXT_PUBLIC_ANT_MEDIA_WEBSOCKET_URL: ${ANT_MEDIA_WEBSOCKET_URL:-wss://localhost:3543/live/websocket}
+        NEXT_PUBLIC_ANT_MEDIA_PROGRAM_STREAM_ID: ${ANT_MEDIA_PROGRAM_STREAM_ID:-sell-image}
+    restart: unless-stopped
+    ports:
+      - "3100:3000"
+    environment:
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    environment:
+      - LAN_IP=${POC_D1_LAN_IP:-192.168.0.188}
+    ports:
+      - "3543:3543"
+      - "8181:8181"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    depends_on:
+      - antmedia
+      - frontend
+      - source-registry
+
+volumes:
+  antmedia-data:
+  redis-data:
+  caddy-data:
+  caddy-config:

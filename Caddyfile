@@ -1,0 +1,26 @@
+{
+	auto_https disable_redirects
+	# Browsers/clients may omit SNI when connecting to an IP address.
+	default_sni {$LAN_IP}
+}
+
+https://{$LAN_IP}:3543, https://localhost:3543, https://127.0.0.1:3543 {
+	tls internal
+	# Keep the browser on the same trusted HTTPS origin while proxying Ant
+	# Media's WebSocket/HTTP application endpoints.
+	handle /live/* {
+		reverse_proxy antmedia:5080
+	}
+	handle /api/* {
+		reverse_proxy source-registry:8080
+	}
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
+
+http://:8181 {
+	root * /data/caddy/pki/authorities/local
+	header /root.crt Content-Disposition "attachment; filename=poc-d1-local-root.crt"
+	file_server
+}
