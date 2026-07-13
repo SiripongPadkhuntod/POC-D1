@@ -4,10 +4,12 @@ import Link from "next/link";
 import { useEffect, useRef, useState } from "react";
 import type { WebRTCAdaptor } from "@antmedia/webrtc_adaptor";
 import { ArrowLeft, Camera, Mic, Radio, Square } from "lucide-react";
-import { defaultWebSocketURL, randomStreamID } from "@/shared/config/media";
+import { browserWebSocketURL, defaultWebSocketURL, randomStreamID } from "@/shared/config/media";
 import { registerSource, unregisterSource, type SourceKind } from "@/features/source-registry/api";
 
 type Status = "idle" | "connecting" | "publishing" | "error";
+type CameraFPS = 30 | 60;
+type ActualVideo = { width?: number; height?: number; frameRate?: number };
 
 export function SourcePublisher({ kind }: { kind: SourceKind }) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -21,11 +23,14 @@ export function SourcePublisher({ kind }: { kind: SourceKind }) {
   const [streamID, setStreamID] = useState("");
   const [label, setLabel] = useState(kind === "camera" ? "Camera" : "Microphone");
   const [publishToken, setPublishToken] = useState("");
+  const [cameraFPS, setCameraFPS] = useState<CameraFPS>(30);
+  const [actualVideo, setActualVideo] = useState<ActualVideo | null>(null);
   const [status, setStatus] = useState<Status>("idle");
   const [message, setMessage] = useState("พร้อมเชื่อมต่อ D1 จริง");
   const [logs, setLogs] = useState<string[]>([]);
 
   useEffect(() => {
+    setWebsocketUrl(browserWebSocketURL());
     setStreamID(randomStreamID(kind));
     return () => {
       mountedRef.current = false;
@@ -49,6 +54,7 @@ export function SourcePublisher({ kind }: { kind: SourceKind }) {
       return;
     }
     stop(false);
+    setActualVideo(null);
     setStatus("connecting");
     setMessage("กำลังเปิดอุปกรณ์และเชื่อม Ant Media…");
     log("connect_start", `studio=${studio} · ${url} · ${id}`);
@@ -58,15 +64,17 @@ export function SourcePublisher({ kind }: { kind: SourceKind }) {
       if (!mountedRef.current) return;
       const adaptor = new WebRTCAdaptor({
         websocket_url: url,
+        reconnectIfRequiredFlag: false,
         localVideoElement: videoRef.current,
         mediaConstraints: kind === "camera"
-          ? { video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30, max: 30 } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
+          ? { video: { width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: cameraFPS, max: cameraFPS } }, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } }
           : { video: false, audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } },
         peerconnection_config: { iceServers: [{ urls: "stun:stun1.l.google.com:19302" }] },
         sdp_constraints: { OfferToReceiveAudio: false, OfferToReceiveVideo: false },
         callback: (info: string) => {
           if (!mountedRef.current) return;
           log(info);
+          if (kind === "camera" && (info === "available_devices" || info === "publish_started")) reportActualVideo();
           if (info === "initialized") {
             adaptor.publish(id, publishToken.trim() || undefined);
           } else if (info === "publish_started") {
@@ -95,6 +103,18 @@ export function SourcePublisher({ kind }: { kind: SourceKind }) {
 
     async function heartbeat() {
       await registerSource({ studioId: studio, id, kind, label: label.trim(), websocketUrl: url });
+    }
+
+    function reportActualVideo(attempt = 0) {
+      const track = (videoRef.current?.srcObject as MediaStream | null)?.getVideoTracks()[0];
+      if (!track) {
+        if (mountedRef.current && adaptorRef.current && attempt < 20) window.setTimeout(() => reportActualVideo(attempt + 1), 250);
+        return;
+      }
+      const settings = track.getSettings();
+      const actual = { width: settings.width, height: settings.height, frameRate: settings.frameRate };
+      setActualVideo(actual);
+      log("capture_settings", `${actual.width ?? "?"}×${actual.height ?? "?"} @ ${actual.frameRate?.toFixed(1) ?? "?"} FPS · requested ${cameraFPS} FPS`);
     }
   }
 
@@ -130,6 +150,7 @@ export function SourcePublisher({ kind }: { kind: SourceKind }) {
           <video ref={videoRef} autoPlay muted playsInline />
           {status !== "publishing" && <div><Icon size={44} /><strong>{kind === "camera" ? "CAMERA SOURCE" : "AUDIO SOURCE"}</strong><span>Media จะส่งตรงไป Ant Media D1</span></div>}
           {status === "publishing" && <b><i /> LIVE DIRECT TO D1</b>}
+          {kind === "camera" && actualVideo && <em className="actual-video">ACTUAL · {actualVideo.width ?? "?"}×{actualVideo.height ?? "?"} @ {actualVideo.frameRate?.toFixed(1) ?? "?"} FPS</em>}
         </section>
         <section className="source-panel">
           <p><Radio size={14} /> DIRECT D1 {kind.toUpperCase()}</p>
@@ -138,6 +159,7 @@ export function SourcePublisher({ kind }: { kind: SourceKind }) {
           <label><span>WEBRTC WEBSOCKET URL</span><input value={websocketUrl} onChange={(event) => setWebsocketUrl(event.target.value)} disabled={busy} /></label>
           <label><span>STREAM ID</span><input value={streamID} onChange={(event) => setStreamID(event.target.value)} disabled={busy} /></label>
           <label><span>SOURCE NAME</span><input value={label} onChange={(event) => setLabel(event.target.value)} disabled={busy} /></label>
+          {kind === "camera" && <label><span>VIDEO FRAME RATE</span><select value={cameraFPS} onChange={(event) => setCameraFPS(Number(event.target.value) as CameraFPS)} disabled={busy}><option value={30}>30 FPS · Recommended</option><option value={60}>60 FPS · High Motion</option></select><small>ค่าจริงขึ้นอยู่กับกล้องและ Browser</small></label>}
           <label><span>PUBLISH TOKEN <small>ไม่บังคับ</small></span><input type="password" value={publishToken} onChange={(event) => setPublishToken(event.target.value)} disabled={busy} /></label>
           <div className={`source-message ${status}`}>{message}</div>
           {!busy

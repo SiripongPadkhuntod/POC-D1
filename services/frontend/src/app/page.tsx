@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Camera, Mic, SlidersHorizontal, RadioTower } from "lucide-react";
+import { Camera, Mic, MonitorPlay, SlidersHorizontal, RadioTower } from "lucide-react";
 
 export default function Home() {
   return (
@@ -14,6 +14,7 @@ export default function Home() {
         <Link href="/camera"><Camera size={28} /><strong>ต่อกล้อง</strong><span>Publish กล้องและไมค์ตรงเข้า D1</span></Link>
         <Link href="/microphone"><Mic size={28} /><strong>ต่อไมโครโฟน</strong><span>Publish audio-only ตรงเข้า D1</span></Link>
         <Link href="/studio"><SlidersHorizontal size={28} /><strong>เปิด Studio</strong><span>เลือกกล้อง ผสมเสียง และส่ง Program</span></Link>
+        <Link href="/viewer"><MonitorPlay size={28} /><strong>เปิด Viewer</strong><span>รับชม Program จาก Ant Media D1</span></Link>
       </section>
     </main>
   );

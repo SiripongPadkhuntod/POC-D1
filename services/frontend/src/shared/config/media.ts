@@ -1,6 +1,31 @@
 export const defaultWebSocketURL = process.env.NEXT_PUBLIC_ANT_MEDIA_WEBSOCKET_URL
   ?? "wss://rtc2.streamssl.com:5443/WebRTCAppEE/websocket";
 
+export function browserWebSocketURL() {
+  if (typeof window === "undefined") return defaultWebSocketURL;
+
+  if (window.location.protocol === "http:" && window.location.port === "3544") {
+    return `ws://${window.location.host}/live/websocket`;
+  }
+
+  try {
+    const configured = new URL(defaultWebSocketURL);
+    const configuredForLoopback = configured.hostname === "localhost" || configured.hostname === "127.0.0.1";
+    const pageIsLoopback = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
+
+    // Keep the configured port/path, but advertise the LAN hostname when the
+    // page is opened from another device or through the Mac's LAN address.
+    if (configuredForLoopback && !pageIsLoopback) {
+      configured.hostname = window.location.hostname;
+      return configured.toString();
+    }
+  } catch {
+    // Validation in the form will report an invalid configured URL.
+  }
+
+  return defaultWebSocketURL;
+}
+
 export const defaultProgramStreamID = process.env.NEXT_PUBLIC_ANT_MEDIA_PROGRAM_STREAM_ID ?? "sell-image";
 
 export function randomStreamID(prefix: "camera" | "microphone") {

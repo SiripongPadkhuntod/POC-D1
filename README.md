@@ -75,7 +75,10 @@ make up
 - Frontend diagnostics: `http://localhost:3100`
 - Source Registry health: `http://localhost:8085/healthz`
 - LAN HTTPS gateway: `https://192.168.0.188:3543`
+- Loopback HTTP gateway: `http://localhost:3544` (สำหรับ browser ที่ไม่ trust local CA)
 - Local CA certificate: `http://192.168.0.188:8181/root.crt`
+
+บน Mac ที่รัน Docker เองให้ใช้ `https://localhost:3543` เป็นหลัก ส่วน URL แบบ LAN IP ใช้สำหรับเครื่อง/โทรศัพท์เครื่องอื่นในวง LAN และต้องอนุญาต Camera, Microphone และ Local network ให้ origin นั้นใน browser ก่อน Frontend จะเปลี่ยน hostname ของ WebRTC WebSocket ให้ตรงกับ hostname ของหน้าเว็บอัตโนมัติ
 
 ตั้งค่าได้ก่อน build:
 
@@ -87,7 +90,13 @@ POC_D1_LAN_IP=192.168.0.188 \
 docker compose up -d --build
 ```
 
-Compose เปิด TCP `5080`, `5443`, `1935` และ UDP `62000-62100` ให้ Ant Media แอป `live` ช่วง WebRTC แบบย่อเหมาะกับ local POC และหลีกเลี่ยง dynamic ports ของ Microsoft Teams บน macOS ค่า server อยู่ใน `antmedia/live-red5-web.properties` และต้องตรงกับ port mapping เสมอ Caddy proxy `/live/*` ไปยัง Ant Media เพื่อให้ WebSocket ทำงานจากหน้า HTTPS เดียวกัน ดู logเฉพาะ media server ด้วย `make logs-antmedia`
+Compose เปิด TCP `5080`, `5443`, `1935` และ UDP `62000-62100` ให้ Ant Media แอป `live` ช่วง WebRTC แบบย่อเหมาะกับ local POC และหลีกเลี่ยง dynamic ports ของ Microsoft Teams บน macOS Caddy proxy `/live/*` ไปยัง Ant Media เพื่อให้ WebSocket ทำงานจากหน้า HTTPS เดียวกัน ดู logเฉพาะ media server ด้วย `make logs-antmedia`
+
+Local smoke test ใช้ stock entrypoint ของ official Ant Media image เพื่อให้ runtime บน amd64 emulation เริ่มทำงานตามค่าเริ่มต้นของ image โดย service `antmedia-init` จะตั้งค่า ICE address, UDP range และ license จาก environment ให้ runtime ก่อนเริ่ม server ทุกครั้ง
+
+`ANT_MEDIA_SERVER_NAME` ต้องเป็น LAN IP ของ Mac และ runtime `start.sh` จะประกาศค่านี้ใน ICE candidates แทน private IP ของ Docker การตั้งค่านี้ยังคงทำงานเมื่อสร้าง volume ใหม่
+
+Ant Media runtime ใช้ volume `antmedia-runtime` ส่วน volume เก่า `poc-d1_antmedia-data` ถูกเก็บไว้นอก Compose เป็น backup และมี console database เดิมชื่อ `server.db.backup-20260713-1415`
 
 ## Develop services independently
 
@@ -118,5 +127,6 @@ make test
 2. เปิด `/studio?studio=sell-01` เพื่อดู source ของ Studio เดียวกัน
 3. เลือก Preview แล้ว Cut เข้า Program
 4. เลือกเสียงที่ต้องการ mix และเริ่ม Program ไป D1
+5. เปิด `/viewer?id=sell-image` เพื่อรับชม Program จากหน้า Viewer ของ POC
 
 หากไม่ระบุ `studio` ระบบใช้ `default` Program stream เริ่มต้นคือ `sell-image` และ Studio อื่นจะเติม Studio ID เพื่อป้องกันชื่อชนกัน

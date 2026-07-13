@@ -4,8 +4,9 @@ import Link from "next/link";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { WebRTCAdaptor } from "@antmedia/webrtc_adaptor";
 import { ArrowLeft, Camera, Mic, RadioTower, RefreshCw, Square, Volume2, VolumeX } from "lucide-react";
-import { defaultProgramStreamID, defaultWebSocketURL } from "@/shared/config/media";
+import { browserWebSocketURL, defaultProgramStreamID, defaultWebSocketURL } from "@/shared/config/media";
 import { listSources, type D1Source } from "@/features/source-registry/api";
+import { useWebRTCStats, WebRTCStats } from "@/components/webrtc-stats";
 
 type AudioSetting = { enabled: boolean; volume: number };
 type StudioStatus = "ready" | "connecting" | "live" | "error";
@@ -20,6 +21,7 @@ export default function StudioPage() {
   const programKeyRef = useRef("");
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+  const silentAudioClockRef = useRef<{ oscillator: OscillatorNode; gain: GainNode } | null>(null);
   const audioNodesRef = useRef(new Map<string, { source: MediaStreamAudioSourceNode; gain: GainNode }>());
   const mountedRef = useRef(true);
   const stopRef = useRef<(update?: boolean) => void>(() => undefined);
@@ -39,17 +41,16 @@ export default function StudioPage() {
   const [message, setMessage] = useState("กำลังค้นหา Source ที่ต่อ D1 อยู่…");
   const [returnAudio, setReturnAudio] = useState(false);
   const [logs, setLogs] = useState<string[]>([]);
+  const programStats = useWebRTCStats(returnPlayerRef, programStreamID, status === "live");
+
+  useEffect(() => {
+    setWebsocketUrl(browserWebSocketURL());
+  }, []);
 
   useEffect(() => {
     const stream = previewCameraID ? streamsRef.current.get(previewCameraID) : null;
     if (previewVideoRef.current) previewVideoRef.current.srcObject = stream ?? null;
   }, [previewCameraID, streamVersion]);
-
-  useEffect(() => {
-    if (status === "live") return;
-    const stream = programCameraID ? streamsRef.current.get(programCameraID) : null;
-    if (programVideoRef.current) programVideoRef.current.srcObject = stream ?? null;
-  }, [programCameraID, status, streamVersion]);
 
   const refreshSources = useCallback(async () => {
     try {
@@ -150,13 +151,28 @@ export default function StudioPage() {
   function prepareAudioMixer() {
     if (audioContextRef.current && audioDestinationRef.current) return;
     const context = new AudioContext();
+    const destination = context.createMediaStreamDestination();
+    const oscillator = context.createOscillator();
+    const silentGain = context.createGain();
+    oscillator.frequency.value = 20;
+    silentGain.gain.value = 0.000001;
+    oscillator.connect(silentGain).connect(destination);
+    oscillator.start();
     audioContextRef.current = context;
-    audioDestinationRef.current = context.createMediaStreamDestination();
+    audioDestinationRef.current = destination;
+    silentAudioClockRef.current = { oscillator, gain: silentGain };
   }
 
   function destroyAudioMixer() {
     audioNodesRef.current.forEach(({ source, gain }) => { source.disconnect(); gain.disconnect(); });
     audioNodesRef.current.clear();
+    const silentClock = silentAudioClockRef.current;
+    silentAudioClockRef.current = null;
+    if (silentClock) {
+      silentClock.oscillator.stop();
+      silentClock.oscillator.disconnect();
+      silentClock.gain.disconnect();
+    }
     if (audioContextRef.current) void audioContextRef.current.close();
     audioContextRef.current = null;
     audioDestinationRef.current = null;
@@ -171,6 +187,7 @@ export default function StudioPage() {
       setMessage("ตรวจ WebSocket URL, Program Stream Key และเลือกกล้องที่มีสัญญาณก่อน");
       return;
     }
+    if (programVideoRef.current) programVideoRef.current.srcObject = null;
     setStatus("connecting");
     setMessage("กำลังผสมเสียงและเปิด Program Publisher…");
     log("PROGRAM", "start", `${url} · ${key}`);
@@ -251,13 +268,14 @@ export default function StudioPage() {
     programKeyRef.current = "";
     if (player) { if (key) player.stop(key); player.closeWebSocket(); }
     if (publisher) { if (key) publisher.stop(key); publisher.closeWebSocket(); }
-    if (programVideoRef.current) programVideoRef.current.srcObject = programCameraID ? streamsRef.current.get(programCameraID) ?? null : null;
+    if (programVideoRef.current) programVideoRef.current.srcObject = null;
     destroyAudioMixer();
     if (update && mountedRef.current) { setStatus("ready"); setMessage("หยุด Program แล้ว · Source ยังต่อ D1 อยู่"); log("PROGRAM", "stopped"); }
   }
 
   stopRef.current = stopProgram;
   const busy = status === "connecting" || status === "live";
+  const programReturnBadge = `${status === "live" ? "LIVE" : status === "connecting" ? "CONNECTING" : status === "error" ? "ERROR" : "OFF AIR"} · ${programStreamID}`;
 
   async function toggleReturnAudio() {
     const video = programVideoRef.current;
@@ -288,7 +306,7 @@ export default function StudioPage() {
       <section className="monitor-grid">
         <Monitor title="PREVIEW" videoRef={previewVideoRef} badge={previewCameraID ?? "NO SOURCE"} />
         <button className="cut-button" onClick={cut} disabled={!previewCameraID || previewCameraID === programCameraID}><span>CUT</span><small>→</small></button>
-        <Monitor title="PROGRAM / D1 RETURN" videoRef={programVideoRef} badge={status === "live" ? "ON AIR" : programCameraID ?? "OFF AIR"} live={status === "live"} />
+        <Monitor title="PROGRAM / D1 RETURN" videoRef={programVideoRef} badge={programReturnBadge} live={status === "live"} stats={programStats} />
       </section>
 
       <section className="sources-section">
@@ -321,8 +339,8 @@ export default function StudioPage() {
   );
 }
 
-function Monitor({ title, videoRef, badge, live }: { title: string; videoRef: React.RefObject<HTMLVideoElement | null>; badge: string; live?: boolean }) {
-  return <div className="monitor"><header><strong>{title}</strong><span className={live ? "live" : ""}>{badge}</span></header><video ref={videoRef} autoPlay muted playsInline /><div className="monitor-empty">NO SIGNAL</div></div>;
+function Monitor({ title, videoRef, badge, live, stats }: { title: string; videoRef: React.RefObject<HTMLVideoElement | null>; badge: string; live?: boolean; stats?: ReturnType<typeof useWebRTCStats> }) {
+  return <div className="monitor"><header><strong>{title}</strong><span className={live ? "live" : ""}>{badge}</span></header><video ref={videoRef} autoPlay muted playsInline /><div className="monitor-empty">NO SIGNAL</div>{stats && <WebRTCStats stats={stats} compact />}</div>;
 }
 
 function SourceReceiver({ source, playToken, preview, program, audio, onStream, onPreview, onAudio }: {

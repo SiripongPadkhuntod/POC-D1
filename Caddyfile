@@ -19,6 +19,21 @@ https://{$LAN_IP}:3543, https://localhost:3543, https://127.0.0.1:3543 {
 	}
 }
 
+# Loopback-only HTTP gateway for clients that cannot install/trust Caddy's
+# local CA (for example the Codex in-app browser). localhost remains a secure
+# context for browser media APIs, and Docker only publishes this on 127.0.0.1.
+http://localhost:3544, http://127.0.0.1:3544 {
+	handle /live/* {
+		reverse_proxy antmedia:5080
+	}
+	handle /api/* {
+		reverse_proxy source-registry:8080
+	}
+	handle {
+		reverse_proxy frontend:3000
+	}
+}
+
 http://:8181 {
 	root * /data/caddy/pki/authorities/local
 	header /root.crt Content-Disposition "attachment; filename=poc-d1-local-root.crt"

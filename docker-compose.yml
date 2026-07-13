@@ -1,6 +1,15 @@
 name: poc-d1
 
 services:
+  antmedia-init:
+    image: ${ANT_MEDIA_IMAGE:-antmedia/enterprise:latest}
+    platform: ${ANT_MEDIA_PLATFORM:-linux/amd64}
+    restart: "no"
+    entrypoint: ["/bin/sh", "/docker-init/init-antmedia.sh"]
+    volumes:
+      - antmedia-runtime:/usr/local/antmedia
+      - ./antmedia/init-antmedia.sh:/docker-init/init-antmedia.sh:ro
+
   antmedia:
     image: ${ANT_MEDIA_IMAGE:-antmedia/enterprise:latest}
     # The current Enterprise latest image is amd64. Docker Desktop will use
@@ -9,6 +18,7 @@ services:
     restart: unless-stopped
     environment:
       LICENSE_KEY: ${ANT_MEDIA_LICENSE_KEY:?Set ANT_MEDIA_LICENSE_KEY in .env}
+      ANT_MEDIA_SERVER_NAME: ${ANT_MEDIA_SERVER_NAME:-192.168.0.188}
     ports:
       - "5080:5080"                         # Dashboard and local HTTP/WebSocket
       - "5443:5443"                         # Ant Media native HTTPS
@@ -17,8 +27,10 @@ services:
       # Reserving 101 ports is reliable on Docker Desktop and enough for POC.
       - "62000-62100:62000-62100/udp"
     volumes:
-      - antmedia-data:/usr/local/antmedia
-      - ./antmedia/live-red5-web.properties:/usr/local/antmedia/webapps/live/WEB-INF/red5-web.properties:ro
+      - antmedia-runtime:/usr/local/antmedia
+    depends_on:
+      antmedia-init:
+        condition: service_completed_successfully
     stop_grace_period: 30s
 
   redis:
@@ -71,6 +83,7 @@ services:
       - LAN_IP=${POC_D1_LAN_IP:-192.168.0.188}
     ports:
       - "3543:3543"
+      - "127.0.0.1:3544:3544"
       - "8181:8181"
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
@@ -82,7 +95,7 @@ services:
       - source-registry
 
 volumes:
-  antmedia-data:
+  antmedia-runtime:
   redis-data:
   caddy-data:
   caddy-config:
