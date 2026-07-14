@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-const SourceTTL = 15 * time.Second
+const SourceTTL = 30 * time.Second
 
 var studioIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]+$`)
 

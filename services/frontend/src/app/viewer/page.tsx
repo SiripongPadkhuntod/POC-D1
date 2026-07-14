@@ -8,10 +8,12 @@ import { browserWebSocketURL, defaultProgramStreamID, defaultWebSocketURL } from
 import { useWebRTCStats, WebRTCStats } from "@/components/webrtc-stats";
 
 type ViewerStatus = "idle" | "connecting" | "playing" | "error";
+type PlaybackMode = "webrtc" | "hls";
 
 export default function ViewerPage() {
   const videoRef = useRef<HTMLVideoElement>(null);
   const adaptorRef = useRef<WebRTCAdaptor | null>(null);
+  const hlsRef = useRef<import("hls.js").default | null>(null);
   const mountedRef = useRef(true);
   const activeStreamRef = useRef("");
   const stopRef = useRef<(update?: boolean) => void>(() => undefined);
@@ -22,10 +24,12 @@ export default function ViewerPage() {
   const [status, setStatus] = useState<ViewerStatus>("idle");
   const [message, setMessage] = useState("พร้อมรับชม Program จาก D1");
   const [muted, setMuted] = useState(true);
-  const stats = useWebRTCStats(adaptorRef, streamID, status === "playing");
+  const [playbackMode, setPlaybackMode] = useState<PlaybackMode>("webrtc");
+  const stats = useWebRTCStats(adaptorRef, streamID, status === "playing" && playbackMode === "webrtc");
 
   useEffect(() => {
     setWebsocketUrl(browserWebSocketURL());
+    setPlaybackMode(isNgrokHost() ? "hls" : "webrtc");
     return () => {
       mountedRef.current = false;
       stopRef.current(false);
@@ -46,6 +50,13 @@ export default function ViewerPage() {
     setMessage(`กำลังเชื่อมต่อ ${id}…`);
     activeStreamRef.current = id;
     window.history.replaceState(null, "", `/viewer?id=${encodeURIComponent(id)}`);
+
+    if (isNgrokHost()) {
+      setPlaybackMode("hls");
+      await startHLS(id);
+      return;
+    }
+    setPlaybackMode("webrtc");
 
     try {
       const { WebRTCAdaptor } = await import("@antmedia/webrtc_adaptor");
@@ -83,16 +94,74 @@ export default function ViewerPage() {
     }
   }
 
+  async function startHLS(id: string) {
+    const video = videoRef.current;
+    if (!video) return;
+    const hlsURL = new URL(`/live/streams/${encodeURIComponent(id)}.m3u8`, window.location.origin);
+    if (playToken.trim()) hlsURL.searchParams.set("token", playToken.trim());
+    setMessage(`กำลังเชื่อมต่อ ${id} ผ่าน HLS/ngrok…`);
+
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = hlsURL.toString();
+      video.onloadedmetadata = () => {
+        if (!mountedRef.current) return;
+        setStatus("playing");
+        setMessage(`LIVE · ${id} · HLS VIA NGROK`);
+        void video.play();
+      };
+      video.onerror = () => {
+        if (!mountedRef.current) return;
+        setStatus("error");
+        setMessage(`ยังรับ HLS ${id} ไม่ได้ · ตรวจว่า Program LIVE และเปิด HLS muxing`);
+      };
+      video.load();
+      return;
+    }
+
+    try {
+      const { default: Hls } = await import("hls.js");
+      if (!mountedRef.current || activeStreamRef.current !== id) return;
+      if (!Hls.isSupported()) throw new Error("Browser นี้ไม่รองรับ HLS playback");
+      const hls = new Hls({ lowLatencyMode: true, liveSyncDurationCount: 2, enableWorker: true });
+      hlsRef.current = hls;
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        if (!mountedRef.current || activeStreamRef.current !== id) return;
+        setStatus("playing");
+        setMessage(`LIVE · ${id} · HLS VIA NGROK`);
+        void video.play();
+      });
+      hls.on(Hls.Events.ERROR, (_event, data) => {
+        if (!data.fatal || !mountedRef.current) return;
+        setStatus("error");
+        setMessage(`ยังรับ HLS ${id} ไม่ได้ · ${data.details}`);
+      });
+      hls.loadSource(hlsURL.toString());
+      hls.attachMedia(video);
+    } catch (error) {
+      setStatus("error");
+      setMessage(error instanceof Error ? error.message : "เปิด HLS Viewer ไม่สำเร็จ");
+    }
+  }
+
   function stop(update = true) {
     const adaptor = adaptorRef.current;
+    const hls = hlsRef.current;
     const activeID = activeStreamRef.current;
     adaptorRef.current = null;
+    hlsRef.current = null;
     activeStreamRef.current = "";
     if (adaptor) {
       if (activeID) adaptor.stop(activeID);
       adaptor.closeWebSocket();
     }
-    if (videoRef.current) videoRef.current.srcObject = null;
+    if (hls) hls.destroy();
+    if (videoRef.current) {
+      videoRef.current.onloadedmetadata = null;
+      videoRef.current.onerror = null;
+      videoRef.current.removeAttribute("src");
+      videoRef.current.srcObject = null;
+      videoRef.current.load();
+    }
     if (update && mountedRef.current) {
       setStatus("idle");
       setMessage("หยุดรับชมแล้ว");
@@ -140,13 +209,13 @@ export default function ViewerPage() {
         </div>
 
         <aside className="viewer-panel">
-          <p><RadioTower size={14} /> ANT MEDIA D1 VIEWER</p>
+          <p><RadioTower size={14} /> ANT MEDIA D1 VIEWER · {playbackMode.toUpperCase()}</p>
           <h1>รับชม Program</h1>
-          <label><span>WEBRTC WEBSOCKET URL</span><input value={websocketUrl} onChange={(event) => setWebsocketUrl(event.target.value)} disabled={busy} /></label>
+          <label><span>WEBRTC WEBSOCKET URL <small>{playbackMode === "hls" ? "ไม่ใช้เมื่อดูผ่าน ngrok" : ""}</small></span><input value={websocketUrl} onChange={(event) => setWebsocketUrl(event.target.value)} disabled={busy || playbackMode === "hls"} /></label>
           <label><span>STREAM ID</span><input value={streamID} onChange={(event) => setStreamID(event.target.value)} disabled={busy} /></label>
           <label><span>PLAY TOKEN <small>ไม่บังคับ</small></span><input type="password" value={playToken} onChange={(event) => setPlayToken(event.target.value)} disabled={busy} /></label>
           <div className={`viewer-message ${status}`}>{message}</div>
-          <WebRTCStats stats={stats} />
+          {playbackMode === "webrtc" && <WebRTCStats stats={stats} />}
           {!busy
             ? <button className="primary" onClick={() => void start()}><Play size={16} /> เริ่มรับชม</button>
             : <button className="danger" onClick={() => stop()}><Square size={15} /> หยุดรับชม</button>}
@@ -160,6 +229,14 @@ export default function ViewerPage() {
 function initialStreamID() {
   if (typeof window === "undefined") return defaultProgramStreamID;
   return new URLSearchParams(window.location.search).get("id")?.trim() || defaultProgramStreamID;
+}
+
+function isNgrokHost() {
+  if (typeof window === "undefined") return false;
+  return window.location.hostname.endsWith(".ngrok-free.dev")
+    || window.location.hostname.endsWith(".ngrok-free.app")
+    || window.location.hostname.endsWith(".ngrok.app")
+    || window.location.hostname.endsWith(".ngrok.io");
 }
 
 function viewerError(error: string) {

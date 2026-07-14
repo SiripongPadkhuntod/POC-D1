@@ -34,5 +34,7 @@ set_property() {
 
 set_property webRTCPortRangeMin 62000 "$live_properties"
 set_property webRTCPortRangeMax 62100 "$live_properties"
+set_property webRTCFrameRate 30 "$live_properties"
+set_property webRTCKeyframeTime 1000 "$live_properties"
 set_property settings.replaceCandidateAddrWithServerAddr true "$live_properties"
 set_property replaceCandidateAddrWithServerAddr true "$live_properties"

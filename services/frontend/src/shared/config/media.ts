@@ -13,11 +13,12 @@ export function browserWebSocketURL() {
     const configuredForLoopback = configured.hostname === "localhost" || configured.hostname === "127.0.0.1";
     const pageIsLoopback = window.location.hostname === "localhost" || window.location.hostname === "127.0.0.1";
 
-    // Keep the configured port/path, but advertise the LAN hostname when the
-    // page is opened from another device or through the Mac's LAN address.
+    // Use the page origin for LAN hosts and HTTPS tunnels. A LAN page keeps
+    // :3543 from window.location.host, while ngrok correctly stays on public
+    // port 443 instead of inheriting the configured local :3543 port.
     if (configuredForLoopback && !pageIsLoopback) {
-      configured.hostname = window.location.hostname;
-      return configured.toString();
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      return `${protocol}//${window.location.host}/live/websocket`;
     }
   } catch {
     // Validation in the form will report an invalid configured URL.

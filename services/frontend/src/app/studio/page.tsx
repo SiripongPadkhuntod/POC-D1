@@ -56,12 +56,15 @@ export default function StudioPage() {
     try {
       const next = await listSources(activeStudioID);
       if (!mountedRef.current) return;
-      setSources(next);
+      setSources((current) => sameSourceList(current, next) ? current : next);
       setAudioSettings((current) => {
         const settings: Record<string, AudioSetting> = {};
         next.forEach((source) => { settings[source.id] = current[source.id] ?? { enabled: false, volume: 100 }; });
-        settingsRef.current = settings;
-        return settings;
+        const unchanged = Object.keys(current).length === Object.keys(settings).length
+          && Object.entries(settings).every(([id, setting]) => current[id] === setting);
+        const result = unchanged ? current : settings;
+        settingsRef.current = result;
+        return result;
       });
       const cameraIDs = next.filter((source) => source.kind === "camera").map((source) => source.id);
       setPreviewCameraID((current) => current && cameraIDs.includes(current) ? current : cameraIDs[0] ?? null);
@@ -154,8 +157,11 @@ export default function StudioPage() {
     const destination = context.createMediaStreamDestination();
     const oscillator = context.createOscillator();
     const silentGain = context.createGain();
-    oscillator.frequency.value = 20;
-    silentGain.gain.value = 0.000001;
+    // Keep a real, continuous audio RTP clock even when no source is mixed.
+    // -80 dB is inaudible in practice but avoids a zero-energy stream being
+    // treated as inactive and stalling audio/video synchronization.
+    oscillator.frequency.value = 440;
+    silentGain.gain.value = 0.0001;
     oscillator.connect(silentGain).connect(destination);
     oscillator.start();
     audioContextRef.current = context;
@@ -310,7 +316,7 @@ export default function StudioPage() {
       </section>
 
       <section className="sources-section">
-        <header><div><strong>ONLINE SOURCES · STUDIO {activeStudioID}</strong><span>Source registry TTL 15 วินาที</span></div><button onClick={() => void refreshSources()}><RefreshCw size={14} /> Refresh</button></header>
+        <header><div><strong>ONLINE SOURCES · STUDIO {activeStudioID}</strong><span>Source registry TTL 30 วินาที</span></div><button onClick={() => void refreshSources()}><RefreshCw size={14} /> Refresh</button></header>
         <div className="source-grid">
           {sources.length === 0 && <div className="empty-source">ยังไม่มี Camera/Microphone ที่ Publish อยู่บน D1</div>}
           {sources.map((source) => (
@@ -427,4 +433,16 @@ function validStudioID(value: string) {
 
 function programStreamForStudio(studioID: string) {
   return studioID === "default" ? defaultProgramStreamID : `${defaultProgramStreamID}-${studioID}`;
+}
+
+function sameSourceList(current: D1Source[], next: D1Source[]) {
+  return current.length === next.length && current.every((source, index) => {
+    const candidate = next[index];
+    return candidate !== undefined
+      && source.studioId === candidate.studioId
+      && source.id === candidate.id
+      && source.kind === candidate.kind
+      && source.label === candidate.label
+      && source.websocketUrl === candidate.websocketUrl;
+  });
 }
