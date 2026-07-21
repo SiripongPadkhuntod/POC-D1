@@ -33,6 +33,12 @@ export default function StudioPage() {
   const [playToken, setPlayToken] = useState("");
   const [publishToken, setPublishToken] = useState("");
   const [sources, setSources] = useState<D1Source[]>([]);
+  const [manualSources, setManualSources] = useState<D1Source[]>([]);
+  const manualSourcesRef = useRef<D1Source[]>([]);
+  const [manualWss, setManualWss] = useState("");
+  const [manualId, setManualId] = useState("");
+  const [manualKind, setManualKind] = useState<D1Source["kind"]>("camera");
+  const [manualLabel, setManualLabel] = useState("");
   const [audioSettings, setAudioSettings] = useState<Record<string, AudioSetting>>({});
   const [previewCameraID, setPreviewCameraID] = useState<string | null>(null);
   const [programCameraID, setProgramCameraID] = useState<string | null>(null);
@@ -57,16 +63,17 @@ export default function StudioPage() {
       const next = await listSources(activeStudioID);
       if (!mountedRef.current) return;
       setSources((current) => sameSourceList(current, next) ? current : next);
+      const merged = [...next, ...manualSourcesRef.current];
       setAudioSettings((current) => {
         const settings: Record<string, AudioSetting> = {};
-        next.forEach((source) => { settings[source.id] = current[source.id] ?? { enabled: false, volume: 100 }; });
+        merged.forEach((source) => { settings[source.id] = current[source.id] ?? { enabled: false, volume: 100 }; });
         const unchanged = Object.keys(current).length === Object.keys(settings).length
           && Object.entries(settings).every(([id, setting]) => current[id] === setting);
         const result = unchanged ? current : settings;
         settingsRef.current = result;
         return result;
       });
-      const cameraIDs = next.filter((source) => source.kind === "camera").map((source) => source.id);
+      const cameraIDs = merged.filter((source) => source.kind === "camera").map((source) => source.id);
       setPreviewCameraID((current) => current && cameraIDs.includes(current) ? current : cameraIDs[0] ?? null);
       setProgramCameraID((current) => current && cameraIDs.includes(current) ? current : cameraIDs[0] ?? null);
       setMessage(next.length ? `Studio ${activeStudioID} พบ Source ออนไลน์ ${next.length} รายการ` : `Studio ${activeStudioID} ยังไม่มี Source ออนไลน์`);
@@ -111,6 +118,46 @@ export default function StudioPage() {
     setProgramStreamID((current) => current === programStreamForStudio(activeStudioID) ? programStreamForStudio(next) : current);
     window.history.replaceState(null, "", `/studio?studio=${encodeURIComponent(next)}`);
     setActiveStudioID(next);
+  }
+
+  function addManualSource() {
+    const wss = (manualWss.trim() || websocketUrl.trim());
+    const id = manualId.trim();
+    if (!wss.startsWith("wss://") && !wss.startsWith("ws://")) {
+      setMessage("WebSocket URL ต้องขึ้นต้นด้วย wss:// หรือ ws://");
+      return;
+    }
+    if (!id) {
+      setMessage("กรุณาระบุ Stream ID");
+      return;
+    }
+    if (sources.some((source) => source.id === id) || manualSources.some((source) => source.id === id)) {
+      setMessage(`Stream ID ${id} มีอยู่แล้ว`);
+      return;
+    }
+    const source: D1Source = {
+      studioId: activeStudioID,
+      id,
+      kind: manualKind,
+      label: manualLabel.trim() || id,
+      websocketUrl: wss,
+      updatedAt: new Date().toISOString(),
+    };
+    const next = [...manualSources, source];
+    manualSourcesRef.current = next;
+    setManualSources(next);
+    setManualId("");
+    setManualLabel("");
+    log("SOURCE", "manual_added", `${wss} · ${id}`);
+  }
+
+  function removeManualSource(id: string) {
+    const next = manualSources.filter((source) => source.id !== id);
+    manualSourcesRef.current = next;
+    setManualSources(next);
+    if (previewCameraID === id) setPreviewCameraID(null);
+    if (programCameraID === id) setProgramCameraID(null);
+    log("SOURCE", "manual_removed", id);
   }
 
   function handleSourceStream(id: string, stream: MediaStream | null) {
@@ -317,21 +364,35 @@ export default function StudioPage() {
 
       <section className="sources-section">
         <header><div><strong>ONLINE SOURCES · STUDIO {activeStudioID}</strong><span>Source registry TTL 30 วินาที</span></div><button onClick={() => void refreshSources()}><RefreshCw size={14} /> Refresh</button></header>
+        <div className="manual-source">
+          <input value={manualWss} onChange={(event) => setManualWss(event.target.value)} placeholder={websocketUrl || "wss://host:5443/App/websocket"} />
+          <input value={manualId} onChange={(event) => setManualId(event.target.value)} placeholder="Stream ID" />
+          <select value={manualKind} onChange={(event) => setManualKind(event.target.value as D1Source["kind"])}>
+            <option value="camera">CAMERA</option>
+            <option value="microphone">MICROPHONE</option>
+          </select>
+          <input value={manualLabel} onChange={(event) => setManualLabel(event.target.value)} placeholder="Label (ไม่บังคับ)" />
+          <button className="primary" onClick={addManualSource}>เพิ่ม Source</button>
+        </div>
         <div className="source-grid">
-          {sources.length === 0 && <div className="empty-source">ยังไม่มี Camera/Microphone ที่ Publish อยู่บน D1</div>}
-          {sources.map((source) => (
-            <SourceReceiver
-              key={`${source.websocketUrl}:${source.id}:${playToken}`}
-              source={source}
-              playToken={playToken}
-              preview={previewCameraID === source.id}
-              program={programCameraID === source.id}
-              audio={audioSettings[source.id] ?? { enabled: false, volume: 100 }}
-              onStream={handleSourceStream}
-              onPreview={() => source.kind === "camera" && setPreviewCameraID(source.id)}
-              onAudio={(patch) => updateAudio(source.id, patch)}
-            />
-          ))}
+          {sources.length === 0 && manualSources.length === 0 && <div className="empty-source">ยังไม่มี Camera/Microphone ที่ Publish อยู่บน D1</div>}
+          {[...sources, ...manualSources].map((source) => {
+            const manual = manualSources.some((item) => item.id === source.id);
+            return (
+              <SourceReceiver
+                key={`${source.websocketUrl}:${source.id}:${playToken}`}
+                source={source}
+                playToken={playToken}
+                preview={previewCameraID === source.id}
+                program={programCameraID === source.id}
+                audio={audioSettings[source.id] ?? { enabled: false, volume: 100 }}
+                onStream={handleSourceStream}
+                onPreview={() => source.kind === "camera" && setPreviewCameraID(source.id)}
+                onAudio={(patch) => updateAudio(source.id, patch)}
+                onRemove={manual ? () => removeManualSource(source.id) : undefined}
+              />
+            );
+          })}
         </div>
       </section>
 
@@ -349,7 +410,7 @@ function Monitor({ title, videoRef, badge, live, stats }: { title: string; video
   return <div className="monitor"><header><strong>{title}</strong><span className={live ? "live" : ""}>{badge}</span></header><video ref={videoRef} autoPlay muted playsInline /><div className="monitor-empty">NO SIGNAL</div>{stats && <WebRTCStats stats={stats} compact />}</div>;
 }
 
-function SourceReceiver({ source, playToken, preview, program, audio, onStream, onPreview, onAudio }: {
+function SourceReceiver({ source, playToken, preview, program, audio, onStream, onPreview, onAudio, onRemove }: {
   source: D1Source;
   playToken: string;
   preview: boolean;
@@ -358,6 +419,7 @@ function SourceReceiver({ source, playToken, preview, program, audio, onStream, 
   onStream: (id: string, stream: MediaStream | null) => void;
   onPreview: () => void;
   onAudio: (patch: Partial<AudioSetting>) => void;
+  onRemove?: () => void;
 }) {
   const mediaRef = useRef<HTMLVideoElement>(null);
   const adaptorRef = useRef<WebRTCAdaptor | null>(null);
@@ -405,7 +467,7 @@ function SourceReceiver({ source, playToken, preview, program, audio, onStream, 
         {source.kind === "microphone" && <div className="audio-icon"><Mic size={32} /></div>}
         <span>{state}</span>
       </div>
-      <div className="receiver-info"><div>{source.kind === "camera" ? <Camera size={15} /> : <Mic size={15} />}<strong>{source.label}</strong></div><code>{source.id}</code></div>
+      <div className="receiver-info"><div>{source.kind === "camera" ? <Camera size={15} /> : <Mic size={15} />}<strong>{source.label}</strong>{onRemove && <button className="remove-source" onClick={onRemove}>✕</button>}</div><code>{source.id}</code></div>
       <div className="receiver-actions">
         {source.kind === "camera" && <button onClick={onPreview} className={preview ? "active" : ""}>PREVIEW</button>}
         <label><input type="checkbox" checked={audio.enabled} onChange={(event) => onAudio({ enabled: event.target.checked })} /> MIX AUDIO</label>
